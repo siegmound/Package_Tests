@@ -1,0 +1,665 @@
+
+
+---
+
+# Piano A — Preparare server, pacchetto e ambiente Python
+
+## A1. Copia e decomprimi il pacchetto
+
+Sul server:
+
+```bash
+cd /home/arnaud/jose
+
+unzip package_P_traincuda_integrated_v3.zip
+cd package_P_traincuda_integrated_v3_clean
+```
+
+Controlla struttura:
+
+```bash
+pwd
+ls -lh
+ls -lh examples
+ls -lh cpp/src
+ls -lh python
+```
+
+Dovresti vedere almeno:
+
+```text
+cpp/src/pomdp_backup_api.cu
+python/olfnav_cuda_backend/
+python/olfnav_cuda_notebook/
+examples/pomdp_agent_simplified_model.ipynb
+```
+
+## A2. Elimina build vecchia del pacchetto
+
+Il pacchetto contiene una cartella `build/` vecchia generata con CMake. Su un server nuovo può creare confusione.
+
+```bash
+rm -rf build
+mkdir -p build
+```
+
+## A3. Attiva il tuo ambiente Python
+
+Esempio con conda:
+
+```bash
+conda activate hpcenv
+```
+
+Oppure virtualenv:
+
+```bash
+source ~/hpcenv/bin/activate
+```
+
+Poi controlla Python:
+
+```bash
+which python
+python --version
+```
+
+## A4. Installa il package Python locale
+
+Da dentro `package_P_traincuda_integrated_v3_clean`:
+
+```bash
+pip install -e .
+```
+
+Poi aggiungi comunque il path locale:
+
+```bash
+export P_TRAINCUDA_ROOT="$PWD"
+export PYTHONPATH="$PWD/python:${PYTHONPATH:-}"
+```
+
+## A5. Verifica che `olfactory_navigation` sia importabile
+
+Il pacchetto CUDA dipende ancora dal codice originale di `olfactory_navigation`.
+
+```bash
+python - <<'PY'
+import sys
+print("python:", sys.executable)
+
+try:
+    import olfactory_navigation
+    print("OK olfactory_navigation:", olfactory_navigation.__file__)
+except Exception as e:
+    print("ERROR olfactory_navigation:", repr(e))
+
+try:
+    import olfnav_cuda_backend
+    print("OK olfnav_cuda_backend:", olfnav_cuda_backend.__file__)
+except Exception as e:
+    print("ERROR olfnav_cuda_backend:", repr(e))
+PY
+```
+
+Se `olfactory_navigation` fallisce, devi installare o aggiungere al `PYTHONPATH` il repo originale, per esempio:
+
+```bash
+export PYTHONPATH="/path/to/olfactory-navigation:$PYTHONPATH"
+```
+
+oppure:
+
+```bash
+cd /path/to/olfactory-navigation
+pip install -e .
+```
+
+---
+
+# Piano B — Trovare CUDA, `nvcc`, cuBLAS e GPU A100
+
+## B1. Controlla le GPU
+
+```bash
+nvidia-smi
+```
+
+Poi:
+
+```bash
+nvidia-smi --query-gpu=index,name,compute_cap,memory.total --format=csv,noheader
+```
+
+Per A100 devi vedere compute capability:
+
+```text
+8.0
+```
+
+Quindi per la build useremo:
+
+```bash
+export CUDA_ARCH=80
+```
+
+## B2. Trova `nvcc`
+
+Prima prova:
+
+```bash
+which nvcc
+nvcc --version
+```
+
+Se non lo trova:
+
+```bash
+find /usr/local /opt /storage -path "*/bin/nvcc" 2>/dev/null | sort
+```
+
+Esempi possibili:
+
+```text
+/usr/local/cuda/bin/nvcc
+/opt/nvidia/hpc_sdk/Linux_x86_64/25.11/cuda/bin/nvcc
+```
+
+Se trovi `/usr/local/cuda/bin/nvcc`:
+
+```bash
+export CUDA_HOME=/usr/local/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+```
+
+Se trovi, per esempio, HPC SDK:
+
+```bash
+export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_x86_64/25.11/cuda
+export PATH="$CUDA_HOME/bin:$PATH"
+```
+
+Verifica:
+
+```bash
+which nvcc
+nvcc --version
+```
+
+## B3. Trova `libcublas.so`
+
+```bash
+find /usr/local /usr/lib /opt /storage -name "libcublas.so*" 2>/dev/null | sort
+```
+
+Esempi possibili:
+
+```text
+/usr/local/cuda/lib64/libcublas.so
+/usr/local/cuda/targets/x86_64-linux/lib/libcublas.so
+/opt/nvidia/hpc_sdk/Linux_x86_64/25.11/math_libs/13.0/targets/x86_64-linux/lib/libcublas.so.13
+```
+
+Scegli la cartella che contiene `libcublas.so*`.
+
+Esempio CUDA standard:
+
+```bash
+export CUBLAS_LIB=/usr/local/cuda/lib64
+```
+
+Esempio HPC SDK:
+
+```bash
+export CUBLAS_LIB=/opt/nvidia/hpc_sdk/Linux_x86_64/25.11/math_libs/13.0/targets/x86_64-linux/lib
+```
+
+Poi:
+
+```bash
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+```
+
+Verifica:
+
+```bash
+ls -lh "$CUBLAS_LIB"/libcublas.so*
+```
+
+## B4. Trova `cublas_v2.h`
+
+```bash
+find "$CUDA_HOME" /usr/local /opt /storage -name "cublas_v2.h" 2>/dev/null | sort
+```
+
+Esempio CUDA standard:
+
+```bash
+export CUBLAS_INCLUDE=/usr/local/cuda/include
+```
+
+Esempio alternativo:
+
+```bash
+export CUBLAS_INCLUDE=/usr/local/cuda/targets/x86_64-linux/include
+```
+
+Verifica:
+
+```bash
+ls -lh "$CUBLAS_INCLUDE/cublas_v2.h"
+```
+
+---
+
+# Piano C — Build senza CMake
+
+Da dentro il pacchetto:
+
+```bash
+cd /home/arnaud/jose/package_P_traincuda_integrated_v3_clean
+
+export P_TRAINCUDA_ROOT="$PWD"
+export PYTHONPATH="$PWD/python:${PYTHONPATH:-}"
+export CUDA_ARCH=80
+```
+
+## C1. Build diretta con `nvcc`
+
+```bash
+rm -rf build
+mkdir -p build
+
+nvcc -O3 -std=c++17 -shared -Xcompiler -fPIC \
+  -Icpp/include \
+  -I"$CUBLAS_INCLUDE" \
+  -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} \
+  cpp/src/pomdp_backup_api.cu \
+  -L"$CUBLAS_LIB" -lcublas \
+  -o build/libpomdp_backup_cuda.so
+```
+
+## C2. Verifica che la `.so` esista
+
+```bash
+ls -lh build/libpomdp_backup_cuda.so
+```
+
+## C3. Verifica linking runtime
+
+```bash
+ldd build/libpomdp_backup_cuda.so | grep -E "cublas|cudart|cuda|not found"
+```
+
+Situazione buona:
+
+```text
+libcublas.so... => /path/to/libcublas.so...
+libcudart.so... => /path/to/libcudart.so...
+```
+
+Situazione cattiva:
+
+```text
+libcublas.so... => not found
+```
+
+Se appare `not found`, rifai:
+
+```bash
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+```
+
+e ricontrolla:
+
+```bash
+ldd build/libpomdp_backup_cuda.so | grep -E "cublas|cudart|cuda|not found"
+```
+
+## C4. Test diretto da Python
+
+```bash
+python - <<'PY'
+import ctypes
+ctypes.CDLL("build/libpomdp_backup_cuda.so")
+print("OK: CUDA backend library loaded")
+PY
+```
+
+Se questo passa, la libreria è caricabile da Python.
+
+## C5. Salva un file ambiente riutilizzabile
+
+Crea questo file:
+
+```bash
+cat > .cuda_runtime_env.sh <<EOF
+export P_TRAINCUDA_ROOT="$PWD"
+export PYTHONPATH="$PWD/python:\${PYTHONPATH:-}"
+export CUDA_HOME="$CUDA_HOME"
+export CUBLAS_LIB="$CUBLAS_LIB"
+export CUBLAS_INCLUDE="$CUBLAS_INCLUDE"
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:\${LD_LIBRARY_PATH:-}"
+export RF_LIB="$PWD/build/libpomdp_backup_cuda.so"
+EOF
+```
+
+Ogni volta che riapri il terminale:
+
+```bash
+cd /home/arnaud/jose/package_P_traincuda_integrated_v3_clean
+source .cuda_runtime_env.sh
+```
+
+---
+
+# Piano D — Cambiare path nei notebook e lanciare correttamente
+
+Il notebook principale è:
+
+```text
+examples/pomdp_agent_simplified_model.ipynb
+```
+
+## D1. Avvia Jupyter dallo stesso terminale configurato
+
+Molto importante: fai `source .cuda_runtime_env.sh` **prima** di lanciare Jupyter.
+
+```bash
+cd /home/arnaud/jose/package_P_traincuda_integrated_v3_clean
+source .cuda_runtime_env.sh
+
+jupyter lab
+```
+
+oppure:
+
+```bash
+jupyter notebook
+```
+
+## D2. Cambia `PATCH_ROOT`
+
+Nel notebook, la prima cella ha una cosa simile:
+
+```python
+PATCH_ROOT = os.environ.get(
+    "P_TRAINCUDA_ROOT",
+    "/home/jlpfritas/HPC-POMDP/v1train_cuda/package_P_traincuda_integrated_v3_clean",
+)
+```
+
+Questa parte va bene se hai esportato:
+
+```bash
+export P_TRAINCUDA_ROOT="$PWD"
+```
+
+Per sicurezza, puoi sostituirla direttamente con:
+
+```python
+PATCH_ROOT = "/home/arnaud/jose/package_P_traincuda_integrated_v3_clean"
+```
+
+Oppure meglio ancora:
+
+```python
+import os
+PATCH_ROOT = os.environ["P_TRAINCUDA_ROOT"]
+```
+
+## D3. Cambia `ENV_PATH`
+
+Nel notebook troverai:
+
+```python
+ENV_PATH = (
+    "/home/jlpfritas/HPC-POMDP/v3/recon/"
+    "Env-olfnav-trim552-fliplr-cropx780-thr1e4/"
+    "Env-320_485-marg_20_20_20_20-edge_wrap_vertical-start_odor_present-source_163_406_radius2"
+)
+```
+
+Sul server nuovo devi sostituirlo con il path reale del dataset.
+
+Nel tuo log precedente era:
+
+```python
+ENV_PATH = "/storage/arnaud/datasets/Env-320_485-marg_20_20_20_20-edge_wrap_vertical-start_odor_present-source_163_406_radius2"
+```
+
+Quindi metti:
+
+```python
+ENV_PATH = "/storage/arnaud/datasets/Env-320_485-marg_20_20_20_20-edge_wrap_vertical-start_odor_present-source_163_406_radius2"
+```
+
+Verifica da terminale:
+
+```bash
+ls -lh /storage/arnaud/datasets/Env-320_485-marg_20_20_20_20-edge_wrap_vertical-start_odor_present-source_163_406_radius2
+```
+
+## D4. Cambia `CUDA_DEVICE`
+
+Hai 4 A100. Puoi scegliere GPU 0, 1, 2 o 3.
+
+Nel notebook:
+
+```python
+CUDA_DEVICE = 0
+```
+
+Per usare la seconda GPU:
+
+```python
+CUDA_DEVICE = 1
+```
+
+Oppure da terminale puoi limitare Jupyter a una GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 jupyter lab
+```
+
+In quel caso, dentro Python la GPU visibile sarà `device=0`, anche se fisicamente era la GPU 0 del server.
+
+Per evitare interferenze con altri utenti, controlla prima:
+
+```bash
+nvidia-smi
+```
+
+## D5. Cambia espansioni e partizioni per smoke test
+
+Prima fai un test piccolo:
+
+```python
+PARTITIONS_TEST = (12, 12)
+EXPANSIONS = 5
+RUN_CUDA_TRAIN = True
+RUN_CPU_TRAIN = False
+RUN_CUPY_TRAIN = False
+RUN_FULL_EVAL = False
+```
+
+Se funziona, poi sali:
+
+```python
+PARTITIONS_TEST = (24, 24)
+EXPANSIONS = 100
+```
+
+## D6. Verifica `CUDA_LIB`
+
+Nel notebook deve stampare:
+
+```text
+CUDA_LIB exists: True
+```
+
+Se dice `False`, il path è sbagliato o la build non è stata fatta.
+
+Controlla nel notebook:
+
+```python
+CUDA_LIB = os.path.join(PATCH_ROOT, "build", "libpomdp_backup_cuda.so")
+print(CUDA_LIB)
+print(os.path.exists(CUDA_LIB))
+```
+
+## D7. Test minimo prima di `traincuda`
+
+Esegui in una cella:
+
+```python
+import ctypes, os
+
+print("PATCH_ROOT:", PATCH_ROOT)
+print("CUDA_LIB:", CUDA_LIB)
+print("CUDA_LIB exists:", os.path.exists(CUDA_LIB))
+print("LD_LIBRARY_PATH:", os.environ.get("LD_LIBRARY_PATH", ""))
+
+ctypes.CDLL(CUDA_LIB)
+print("OK: CUDA library loaded from notebook")
+```
+
+Se questa cella fallisce con `libcublas.so not found`, il problema è che Jupyter non ha ereditato `LD_LIBRARY_PATH`. Devi chiudere Jupyter e rilanciarlo così:
+
+```bash
+cd /home/arnaud/jose/package_P_traincuda_integrated_v3_clean
+source .cuda_runtime_env.sh
+jupyter lab
+```
+
+---
+
+# Comando riassuntivo completo per server A100
+
+Questo è il flusso compatto che farei io:
+
+```bash
+cd /home/arnaud/jose/package_P_traincuda_integrated_v3_clean
+
+rm -rf build
+mkdir -p build
+
+export P_TRAINCUDA_ROOT="$PWD"
+export PYTHONPATH="$PWD/python:${PYTHONPATH:-}"
+
+# Trova CUDA
+export CUDA_HOME="$(dirname "$(dirname "$(readlink -f "$(which nvcc)")")")"
+export PATH="$CUDA_HOME/bin:$PATH"
+
+# Trova cuBLAS
+export CUBLAS_LIB="$(dirname "$(find /usr/local /usr/lib /opt /storage -name 'libcublas.so*' 2>/dev/null | sort -V | tail -n1)")"
+export CUBLAS_INCLUDE="$(dirname "$(find "$CUDA_HOME" /usr/local /opt /storage -name 'cublas_v2.h' 2>/dev/null | sort -V | head -n1)")"
+
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+
+# A100
+export CUDA_ARCH=80
+
+nvcc -O3 -std=c++17 -shared -Xcompiler -fPIC \
+  -Icpp/include \
+  -I"$CUBLAS_INCLUDE" \
+  -gencode arch=compute_${CUDA_ARCH},code=sm_${CUDA_ARCH} \
+  cpp/src/pomdp_backup_api.cu \
+  -L"$CUBLAS_LIB" -lcublas \
+  -o build/libpomdp_backup_cuda.so
+
+ldd build/libpomdp_backup_cuda.so | grep -E "cublas|cudart|cuda|not found"
+
+python - <<'PY'
+import ctypes
+ctypes.CDLL("build/libpomdp_backup_cuda.so")
+print("OK: libpomdp_backup_cuda.so loaded")
+PY
+
+cat > .cuda_runtime_env.sh <<EOF
+export P_TRAINCUDA_ROOT="$PWD"
+export PYTHONPATH="$PWD/python:\${PYTHONPATH:-}"
+export CUDA_HOME="$CUDA_HOME"
+export CUBLAS_LIB="$CUBLAS_LIB"
+export CUBLAS_INCLUDE="$CUBLAS_INCLUDE"
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:\${LD_LIBRARY_PATH:-}"
+export RF_LIB="$PWD/build/libpomdp_backup_cuda.so"
+EOF
+```
+
+Poi:
+
+```bash
+source .cuda_runtime_env.sh
+jupyter lab
+```
+
+---
+
+# Diagnosi rapida degli errori più probabili
+
+## Caso 1 — `nvcc: command not found`
+
+Soluzione:
+
+```bash
+find /usr/local /opt /storage -path "*/bin/nvcc" 2>/dev/null | sort
+```
+
+Poi imposta `CUDA_HOME`.
+
+## Caso 2 — `fatal error: cublas_v2.h: No such file or directory`
+
+Soluzione:
+
+```bash
+find /usr/local /opt /storage -name "cublas_v2.h" 2>/dev/null | sort
+export CUBLAS_INCLUDE=/path/che/contiene/cublas_v2.h
+```
+
+Poi ricompila.
+
+## Caso 3 — `libcublas.so: cannot open shared object file`
+
+La build è andata, ma runtime non trova cuBLAS.
+
+Soluzione:
+
+```bash
+find /usr/local /usr/lib /opt /storage -name "libcublas.so*" 2>/dev/null | sort
+export CUBLAS_LIB=/path/che/contiene/libcublas.so
+export LD_LIBRARY_PATH="$CUBLAS_LIB:$CUDA_HOME/lib64:${LD_LIBRARY_PATH:-}"
+```
+
+Poi rilancia Jupyter dallo stesso terminale.
+
+## Caso 4 — `CUDA_LIB exists: False`
+
+Il notebook punta al pacchetto sbagliato.
+
+Soluzione nel notebook:
+
+```python
+PATCH_ROOT = "/home/arnaud/jose/package_P_traincuda_integrated_v3_clean"
+CUDA_LIB = os.path.join(PATCH_ROOT, "build", "libpomdp_backup_cuda.so")
+```
+
+## Caso 5 — `Environment.load(...)` fallisce
+
+`ENV_PATH` è sbagliato o manca il dataset.
+
+Soluzione:
+
+```bash
+find /storage /home -maxdepth 5 -type d -name "Env-320_485*" 2>/dev/null
+```
+
+Poi nel notebook:
+
+```python
+ENV_PATH = "/path/reale/del/dataset"
+```
+
+---
+
+La cosa più importante: **non lanciare Jupyter prima di aver fatto `source .cuda_runtime_env.sh`**, perché altrimenti il notebook vede `traincuda`, ma quando arriva a caricare la `.so` può fallire su `libcublas.so`.
