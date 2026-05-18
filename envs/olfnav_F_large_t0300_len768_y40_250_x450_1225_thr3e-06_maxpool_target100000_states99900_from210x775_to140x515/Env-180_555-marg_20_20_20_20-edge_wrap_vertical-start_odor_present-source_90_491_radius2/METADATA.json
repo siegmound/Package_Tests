@@ -1,0 +1,55 @@
+{
+    "name": "180_555-marg_20_20_20_20-edge_wrap_vertical-start_odor_present-source_90_491_radius2",
+    "data_file_path": "/home/jlpfritas/HPC-POMDP/v3/recon/generated_envs_large_then_downsample_thr3e6/npy/nose_data_olfnav_F_large_t0300_len768_y40_250_x450_1225_thr3e-06_maxpool_target100000_states99900_from210x775_to140x515.npy",
+    "timesteps": 768,
+    "data_shape": [
+        140,
+        515
+    ],
+    "dimensions": 2,
+    "margins": [
+        [
+            20,
+            20
+        ],
+        [
+            20,
+            20
+        ]
+    ],
+    "shape": [
+        180,
+        555
+    ],
+    "data_bounds": [
+        [
+            20,
+            160
+        ],
+        [
+            20,
+            535
+        ]
+    ],
+    "original_data_source_position": [
+        70,
+        471
+    ],
+    "data_source_position": [
+        70,
+        471
+    ],
+    "layers": false,
+    "source_position": [
+        90,
+        491
+    ],
+    "source_radius": 2,
+    "interpolation_method": "Linear",
+    "preprocess_data": false,
+    "data_processed": true,
+    "boundary_condition": "wrap_vertical",
+    "start_type": "odor_present",
+    "seed": 12131415,
+    "odor_present_threshold": 3e-06
+}
